@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# Challenge data & docs — NEVER commit. Read data from input-data (see README).
+# ---------------------------------------------------------------------------
+input-data/
+challenge_docs/
+data/*
+!data/README.md
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.xlsx
+
+# Generated outputs (submissions, figures, model artefacts)
+outputs/*
+!outputs/.gitkeep
+models/
+mlruns/
+*.pkl
+*.joblib
+*.pt
+*.onnx
+
+# Secrets / credentials (leaderboard token, API keys)
+.env
+.env.*
+!.env.example
+secrets/
+.pi/
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.python-version
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+.virtual_documents/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings
+.claude/settings.local.json
+
