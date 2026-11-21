@@ -75,8 +75,3 @@ def sensor_columns(df: pd.DataFrame) -> list[str]:
 def to_binary(labels: pd.Series) -> pd.Series:
     """Encode labels as 1 = rejected (the positive / alarm class), 0 = accepted."""
     return (labels == LABEL_REJECTED).astype(int)
-
-
-def from_binary(y: pd.Series) -> pd.Series:
-    """Inverse of :func:`to_binary`."""
-    return y.map({1: LABEL_REJECTED, 0: LABEL_ACCEPTED})
