@@ -33,6 +33,14 @@ dependencies:
   - imbalanced-learn       
   - shap                   
   - optuna                 
+  - pyod                   # anomaly detection (one-class / accepted-only track)
+  - tslearn                # time-series alignment (DTW) & clustering
+
+  # --- Dev tooling ---
+  - pytest
+  - ruff
+  - pre-commit
+  - nbstripout
   
   # --- Deep learning / NLP (CPU builds) ---
   - pytorch

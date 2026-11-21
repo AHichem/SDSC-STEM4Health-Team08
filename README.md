@@ -1,4 +1,41 @@
-# SDSC-STEM4Health-group00
+# SDSC-STEM4Health-group08 — Building Resilient Process Monitoring Models (Project 2)
+
+Batch process monitoring for two processes, built for the STEM4Health x Johnson & Johnson hackathon:
+**A** is an industrial process with imbalanced labels, and **B** is a simulated fed-batch fermentation with strong dynamics.
+We use one monitoring strategy for both processes and fit it separately to each.
+
+## Quick start
+
+```bash
+make setup          # Renku: editable install + git hooks (re-run every new session); use `make setup-local` elsewhere
+cp .env.example .env  # add leaderboard team name / token
+make check          # ruff + pytest
+```
+
+```python
+from brpmm.data import load_calibration, load_test
+
+ts, labels = load_calibration("B")  # long format: batch_id, t, sensors...
+```
+
+## Layout
+
+```
+src/brpmm/        reusable code (data loading, features, models, submission)
+notebooks/        exploration — prefix with initials + number, e.g. 01_mv_eda_process_b.ipynb
+tests/            pytest, synthetic data only
+data/             gitignored; challenge data is read from input-data, never committed
+outputs/          gitignored; timestamped submissions, figures
+challenge_docs/   gitignored; local copy of the brief + data (not shared via git)
+```
+
+## Conventions
+
+- Code that more than one notebook needs goes in `src/brpmm`. Notebooks import it and don't copy it.
+- Notebook outputs are stripped on commit (nbstripout) and files over 1 MB are blocked (pre-commit).
+- Every leaderboard submission is saved via `brpmm.submission.save_submission`. Write down what produced it.
+
+---
 
 ## Getting started in the SDSC STEM4Health Hackathon
 
