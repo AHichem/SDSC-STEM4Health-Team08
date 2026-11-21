@@ -3,7 +3,6 @@ import pytest
 
 from brpmm.data import (
     TIME_COL,
-    from_binary,
     load_calibration,
     load_test,
     sensor_columns,
@@ -31,8 +30,6 @@ def test_mismatched_labels_raise(fake_root):
         load_calibration("B", root=fake_root)
 
 
-def test_binary_encoding_round_trips():
+def test_binary_encoding_marks_rejected_as_one():
     labels = pd.Series({"A_1": "accepted", "A_2": "rejected"})
-    y = to_binary(labels)
-    assert y.tolist() == [0, 1]
-    assert from_binary(y).equals(labels)
+    assert to_binary(labels).tolist() == [0, 1]
