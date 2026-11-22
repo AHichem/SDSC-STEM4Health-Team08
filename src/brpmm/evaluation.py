@@ -342,3 +342,36 @@ def leaderboard_summary(dec: np.ndarray, y: np.ndarray, top_f1: float) -> dict:
         "one_test_draw_median_f1": round(float(boot.f1.median()), 4),
         "p_beat_top": round(float((boot.f1 > top_f1).mean()), 3),
     }
+
+
+def subagged(
+    fit, score, X: pd.DataFrame, y: pd.Series, Xt: pd.DataFrame, n_bags=50, fraction=0.8, seed=0
+) -> tuple[float, np.ndarray]:
+    """Subagging: ``n_bags`` models, each fitted on a stratified ``fraction`` subsample of
+    (X, y) without replacement. Returns the cut-off chosen (brpmm.evaluate.choose_cutoff) on
+    the mean out-of-bag score of each training batch, and the mean score of ``Xt``; cut-off
+    and test scores come from the same kind of model."""
+    from brpmm.config import LABEL_REJECTED
+    from brpmm.evaluate import choose_cutoff
+
+    rng = np.random.default_rng(seed)
+    rejected = (pd.Series(y) == LABEL_REJECTED).to_numpy()
+    oob_sum, oob_n, test = np.zeros(len(X)), np.zeros(len(X)), np.zeros(len(Xt))
+    for _ in range(n_bags):
+        idx = np.concatenate(
+            [
+                rng.choice(
+                    np.flatnonzero(rejected == k),
+                    int(fraction * (rejected == k).sum()),
+                    replace=False,
+                )
+                for k in (False, True)
+            ]
+        )
+        oob = np.setdiff1d(np.arange(len(X)), idx)
+        model = fit(X.iloc[idx], y.iloc[idx])
+        oob_sum[oob] += score(model, X.iloc[oob])
+        oob_n[oob] += 1
+        test += score(model, Xt)
+    seen = oob_n > 0
+    return choose_cutoff(oob_sum[seen] / oob_n[seen], y[seen]), test / n_bags
