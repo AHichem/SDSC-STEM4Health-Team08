@@ -8,9 +8,18 @@ We use one monitoring strategy for both processes and fit it separately to each.
 
 ```bash
 make setup          # Renku: editable install + git hooks (re-run every new session); use `make setup-local` elsewhere
+make data           # stage challenge data into data/raw (once per machine)
 cp .env.example .env  # add leaderboard team name / token
 make check          # ruff + pytest
+make predict        # LEADERBOARD FILE (python -m brpmm.predict) -> outputs/<time>_A-ensemble_B-pca_NOT-SUBMITTED.csv
+make monitor        # accepted-only solution (round 2) -> outputs/<time>_monitor.csv + .json
+make evaluate       # every method on the shared CV protocol -> findings report
+make select         # evidence for the A model (~2 min) -> outputs/process_A/final_selection.json
+make tune           # nested tuning + extra views (~25 min) -> outputs/process_A/tuning/
+make eda-a          # process A data analysis -> outputs/process_A/eda/REPORT.md
 ```
+
+Nothing is ever submitted automatically; `brpmm.submission.submit` is a separate, deliberate step.
 
 ```python
 from brpmm.data import load_calibration, load_test
@@ -18,14 +27,50 @@ from brpmm.data import load_calibration, load_test
 ts, labels = load_calibration("B")  # long format: batch_id, t, sensors...
 ```
 
+## Results
+
+| | Model | Calibration CV (F1, accepted positive) | Leaderboard |
+|---|---|---|---|
+| A | `methods.ensemble`: RBF SVM + kNN on PCA + one-class SVM on 22 median/std features | 0.941 ± 0.002 (fresh splits) | **0.931** |
+| B | `methods.pca_mspc` on accepted batches (same 5 rejects as the aeration rule) | 1.000 | **1.000** |
+| A, accepted only | `scripts/monitor.py`: PCA + kNN monitors | ROC-AUC 0.842; catches 46 % at 94 % specificity | not scored |
+| B, accepted only | `process_b`: aeration rule + PCA monitor with review flags | 1.000, 5/5, 0 false alarms | not scored |
+
+Every model, its validation type and its score: `docs/model_results.md`.
+
 ## Layout
 
 ```
-src/brpmm/        reusable code (data loading, features, models, submission)
+src/brpmm/        reusable code
+  config.py         paths (data/raw first, then Renku input-data, then challenge_docs) + model/CV settings
+  data.py           load calibration/test time series + labels
+  submission.py     build / validate / submit leaderboard files
+  -- leaderboard pipeline --
+  features.py       batch features: level, shape, within-batch correlations (243 A / 393 B)
+  methods.py        every compared method as fit / score / explain; final A `ensemble`
+  evaluate.py       the shared CV protocol (seeds 42+r, 5x5 folds, inner 3-fold cut-off)
+  metrics.py        leaderboard F1 on label strings (accepted = positive)
+  predict.py        final models on all calibration data -> submission + per-batch details
+  report.py         findings report
+  -- accepted-only monitoring, analysis and evidence --
+  prepare.py        stage raw data into data/raw
+  preprocessing.py  segmentation (start/steady/end), gross-outlier mask, quality report
+  steady_features.py steady-state batch features + model-space transforms
+  mspc.py, novelty.py  accepted-only monitors: PCA (T², SPE, contributions), kNN distance
+  rules.py, process_b.py  process B: aeration rule + accepted-only monitor with review flags
+  models.py         alternative A ensembles compared against the submitted one (SETTINGS)
+  evaluation.py     CV tools: nested thresholds, bootstrap, permutation, importance
+docs/model_results.md  team registry of every model and its validated score
+scripts/
+  monitor.py          accepted-only monitoring for A and B (round 2)
+  select_final_a.py   submitted A model vs its alternatives, fresh splits
+  tune_process_a.py   nested hyperparameter search; extra views under the same rule
+  eda_process_a.py    process A data analysis report + figures
+  dashboard_process_a.py  datasets for the interactive analysis page
 notebooks/        exploration — prefix with initials + number, e.g. 01_mv_eda_process_b.ipynb
 tests/            pytest, synthetic data only
-data/             gitignored; challenge data is read from input-data, never committed
-outputs/          gitignored; timestamped submissions, figures
+data/             gitignored: raw/ (staged challenge data), processed/ (feature tables)
+outputs/          gitignored; reports, figures, timestamped submissions
 challenge_docs/   gitignored; local copy of the brief + data (not shared via git)
 ```
 
@@ -34,6 +79,18 @@ challenge_docs/   gitignored; local copy of the brief + data (not shared via git
 - Code that more than one notebook needs goes in `src/brpmm`. Notebooks import it and don't copy it.
 - Notebook outputs are stripped on commit (nbstripout) and files over 1 MB are blocked (pre-commit).
 - Every leaderboard submission is saved via `brpmm.submission.save_submission`. Write down what produced it.
+
+## Scoring
+
+Score = mean of the per-process F1 (A and B weighted equally). The brief says F1 is for the
+rejected class, but every leaderboard entry's accuracy, precision and recall solve to **120
+batches in the scored class** of the 161-batch A test set (calibration: 121 accepted, 40 rejected;
+test features match calibration). So the F1 on the leaderboard behaves as **F1 of the accepted
+class**: a missed reject and a false alarm cost about the same, and predicting "all accepted"
+already scores 0.854 on A. Our own submission confirmed it: its returned accuracy, precision and
+recall fit only this reading (30 of 41 rejects caught, 6 of 120 good batches thrown away).
+`brpmm.metrics.leaderboard_f1` and `brpmm.evaluation` (`f1_accepted`) compute it identically
+(tests/test_metric_alignment.py).
 
 ---
 
