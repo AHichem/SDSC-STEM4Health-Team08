@@ -55,10 +55,44 @@ def test_best_threshold_separates_clean_scores():
     assert 0.3 < t <= 0.8
 
 
-def test_tuned_threshold_is_nested_and_learns():
+def test_tuned_threshold_learns_a_working_cutoff():
     X, y = toy()
     res = repeated_cv(tuned_threshold(supervised(LogisticRegression())), X, y, "t", n_repeats=2)
-    assert res.summary()["f1_rejected_mean"] > 0.6
+    assert res.summary()["f1_accepted_mean"] > 0.85
+
+
+def test_tuned_threshold_uses_training_data_only():
+    # the cut-off must not depend on the scored batches: scoring a subset of the test rows
+    # gives the same decisions for those rows as scoring all of them
+    X, y = toy()
+    fp = tuned_threshold(supervised(LogisticRegression()))
+    _, all_dec = fp(X.iloc[:90], y[:90], X.iloc[90:])
+    _, part_dec = fp(X.iloc[:90], y[:90], X.iloc[90:100])
+    np.testing.assert_array_equal(all_dec[:10], part_dec)
+
+
+def test_harness_seed_is_restored_even_on_error():
+    import brpmm.evaluate as harness
+    from brpmm.evaluation import harness_seed
+
+    before = harness.SEED
+    try:
+        with harness_seed(before + 7):
+            assert before + 7 == harness.SEED
+            raise RuntimeError
+    except RuntimeError:
+        pass
+    assert before == harness.SEED
+
+
+def test_leaderboard_summary_counts_and_f1():
+    from brpmm.evaluation import leaderboard_summary
+
+    y = np.array([0] * 8 + [1] * 2)
+    dec = np.array([[0] * 7 + [1] + [1, 0]])  # one false alarm, one reject caught, one missed
+    out = leaderboard_summary(dec, y, top_f1=0.9)
+    assert out["bad_caught_of_40"] == 1.0 and out["good_thrown_away_of_121"] == 1.0
+    assert out["f1_accepted"] == round(2 * 7 / (2 * 7 + 1 + 1), 4)
 
 
 def test_bootstrap_metrics_perfect_and_extra_counts():
