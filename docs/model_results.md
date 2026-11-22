@@ -162,7 +162,7 @@ Saved: `outputs/20261121-181628_A-ensemble_B-pca_NOT-SUBMITTED.csv` (+ `_details
   The 5 rejected show the known fault (aeration −30 % at samples 500–1250); the other 35 show none.
   Gap in score: highest normal 3.2 vs lowest fault 490,000, so the split is safe.
 
-## Round of 22 Nov: leaderboard result, re-validation and tuning (A33–A45, B12)
+## Round of 22 Nov: leaderboard result, re-validation and tuning (A33–A49, B12)
 
 **Leaderboard (A24 submitted as Team 08):** A accuracy 0.894, precision 0.912, recall 0.95, F1 **0.931**. Only one
 reading of those numbers fits: accepted is the positive class, 120 accepted / 41 rejected test batches, and our
@@ -198,6 +198,20 @@ re-implemented members, whose own score under the z-score rule is 0.938 (impleme
   accepted batches (72 % have mostly accepted neighbours), so it adds false alarms; jittered copies change nothing.
 - **TabPFN does not help (A44–A45).** v1 (open weights) alone reaches 0.895; as a fourth member it lowers the
   ensemble. TabPFN v2 needs a Prior Labs licence token and was not tested.
+
+**TabPFN 3.5** (package 10.2.0, checkpoint v3.5, RTX 3050; same splits; the
+submitted ensemble re-ran at 0.941 in the same job):
+
+| id | model | trained on | features | validation | F1 | ± | prec. | recall | acc. | bad caught | good thrown away | code |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A46 | submitted `ensemble` + TabPFN 3.5 as 4th member (her rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.931 | 0.005 | 0.921 | 0.942 | 0.896 | 30.2 / 40 | 7.0 / 121 | tune_process_a.py --part tabpfn |
+| A47 | members (re-implemented) + TabPFN 3.5 (z-score rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.936 | 0.004 | 0.924 | 0.949 | 0.902 | 30.5 / 40 | 6.2 / 121 | tune_process_a.py --part tabpfn |
+| A48 | TabPFN 3.5 alone, 22 median+std | accepted + rejected | 22 median+std | cv, fresh splits | 0.909 | 0.005 | 0.896 | 0.924 | 0.862 | 27.0 / 40 | 9.2 / 121 | tune_process_a.py --part tabpfn |
+| A49 | TabPFN 3.5 alone, 22 + 90 steady features | accepted + rejected | 22 + 90 steady | cv, fresh splits | 0.894 | 0.003 | 0.879 | 0.911 | 0.839 | 24.8 / 40 | 10.8 / 121 | tune_process_a.py --part tabpfn |
+
+- **TabPFN 3.5 does not help (A46–A49).** As a fourth member it adds about two false alarms per
+  161 batches (5.2 → 7.0) without catching more rejects; alone it stays below the submitted ensemble.
+
 - **The operating point is not the issue.** Out of fold, F1 of A24 is flat for 32–36 flagged batches
   (0.944–0.946); going from 34 to 36 flags adds on average one caught reject and one false alarm.
 
@@ -245,7 +259,7 @@ does it for every method registered in `brpmm.methods.METHODS`).
 - Repo (`src/brpmm/`): `features.py`, `methods.py` (all `methods.py:` entries), `evaluate.py` (protocol),
   `metrics.py`, `report.py`. Run: `BRPMM_DATA_DIR=... python -m brpmm.evaluate --process A B`.
 - `scratch/...` entries: experiment scripts on Maria's laptop (not in the repo yet); same splits and seeds.
-- A33–A45, B12: `scripts/select_final_a.py`, `scripts/tune_process_a.py`, `scripts/monitor.py`,
+- A33–A49, B12: `scripts/select_final_a.py`, `scripts/tune_process_a.py`, `scripts/monitor.py`,
   `src/brpmm/process_b.py` (results also in `outputs/process_A/final_selection.json` and `tuning/`).
 - Reports with figures: `outputs/report_<timestamp>/report.md` (gitignored). Shared findings doc:
   https://claude.ai/artifact/KX6J8CK1TAMwukKiu17siS
