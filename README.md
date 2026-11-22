@@ -1,234 +1,190 @@
-# SDSC-STEM4Health-group08 — Building Resilient Process Monitoring Models (Project 2)
+# Building Resilient Process Monitoring Models — Team 08
 
-Batch process monitoring for two processes, built for the STEM4Health x Johnson & Johnson hackathon:
-**A** is an industrial process with imbalanced labels, and **B** is a simulated fed-batch fermentation with strong dynamics.
-We use one monitoring strategy for both processes and fit it separately to each.
+STEM4Health × Johnson & Johnson hackathon, Project 2. Decide for each production batch whether it is
+**accepted** or **rejected**, from its sensor time series, for two processes:
 
-## Quick start
+- **A:** an industrial process (11 sensors);
+- **B:** a simulated penicillin fermentation (IndPenSim).
+
+| Leaderboard | Process A | Process B | Score |
+|---|---|---|---|
+| Team 08 | F1 0.939 (30 of 41 rejects caught, 4 false alarms) | F1 1.000 | 0.970 |
+
+We used **two submissions**. Cross-validation predicted both results before we submitted
+([below](#how-we-reached-0939-with-two-submissions)).
+
+## The problem
+
+- **Unit of decision: the batch.** Labels are per batch, but the data has one row per time step.
+- **What is scored.** The score is the mean of the per-process F1. The brief says F1 of the
+  rejected class, but every leaderboard entry's accuracy, precision and recall solve to 120 batches
+  in the scored class. That is the accepted class (120 accepted, 41 rejected in A's test set).
+  So a missed reject and a false alarm cost about the same, and accepting every batch already scores
+  0.854. `brpmm.metrics.leaderboard_f1` computes it this way; tests/test_metric_alignment.py checks it.
+- **A second, unscored solution.** Train on accepted batches only, as a plant would when rejects are rare.
+
+## What the data tells us
+
+![Process A](docs/figures/data_a.png)
+
+**Process A.** 161 labelled batches: 121 accepted, 40 rejected; 196 to 2,932 steps long.
+- **The signal is weak and spread over the whole batch.** The strongest difference is how much
+  temperature_1 varies. The gap is the same in every tenth of the batch, so there is no fault window
+  to look for.
+- **The classes overlap.** 72 % of rejects have mostly accepted neighbours, so a perfect score is
+  not available from these sensors.
+- **Other patterns:**
+  - shorter batches (under 2,700 steps) are rejected 40 % of the time, against 16 % for longer ones;
+  - there are two operating modes, both present across the whole campaign;
+  - a few batches have sensor dropouts, which inflate a PCA monitor's limits about 1,000×
+    (A_239) unless those rows are masked.
+- **The test set looks like the calibration set.** A classifier trying to tell them apart scores
+  AUC 0.52–0.55, close to chance.
+- **A labelling question.** The brief calls A_101–A_104 "rejected, borderline", but A_101 and A_103
+  are labelled accepted. We took this to the organisers.
+
+![Process B](docs/figures/data_b.png)
+
+**Process B.** 40 labelled batches: 35 accepted, 5 rejected; 5,001 steps each.
+- **All 5 rejects show the same fault:** aeration drops 30 % below the batch's own level for 751
+  steps from step 500. Accepted batches stay within 0.35 % of their own level.
+- **Four starting conditions** (volume, aeration, substrate, biomass) explain almost all the
+  differences between batches.
+- **Three test batches started outside the calibrated range:** B_026, B_029 and B_036 (volume).
+
+**A trap we avoided.** Splitting rows at random lets a model memorise batches: it gave a fake
+ROC-AUC of 1.00. Every split here is by batch, stratified and repeated.
+
+## What we built
+
+| | Process A | Process B |
+|---|---|---|
+| **Features** | median and spread of each sensor over the batch (22 numbers) | aeration relative to the batch's own first 500 steps |
+| **Decision** | ensemble of RBF SVM, kNN (on PCA) and one-class SVM; scores standardised and averaged; cut-off chosen by nested CV to maximise the scored F1 | **rule:** aeration more than 10 % off its own level for ≥ 100 steps |
+| **Unlabelled test batches** | **self-training:** confidently accepted test batches join the training set, then refit (allowed by the organisers) | not needed |
+| **Beyond the label** | calibrated P(rejected), model agreement, 5 most similar past batches, drivers, sensor-fault and new-pattern notes, review route | reason with the onset step; **monitor trained on accepted batches only** flags batches unlike any seen before |
+| **Accepted-only solution** | PCA (T², SPE) + kNN-distance monitor: catches 46 % of rejects at 94 % specificity (ROC-AUC 0.84), names the sensor | the same monitor: F1 1.000 |
+
+## Approaches compared
+
+![Model families](docs/figures/families.png)
+
+**Model families** (5 repeats × 5-fold CV, F1 as scored; full list in [docs/model_results.md](docs/model_results.md)):
+
+| Approach | F1 | What it taught us |
+|---|---|---|
+| Accept every batch | 0.858 | the bar to beat |
+| Logistic regression, random forest, gradient boosting (243 features) | 0.846–0.860 | with 243 features and 40 rejects they barely beat accepting everything |
+| PCA monitor, accepted only (243 features) | 0.855 | the same with 243 features for a one-class model |
+| 1D-CNN on raw trajectories; MLP | 0.890; 0.902 | below a plain RBF SVM on 22 features: 161 batches are few for deep learning |
+| One-class SVM, accepted only (22 features) | 0.899 | close to supervised, with no rejects needed |
+| kNN; RBF SVM (22 features) | 0.903; 0.931 | few robust features work best |
+| **Ensemble: SVM + kNN + one-class SVM** | **0.943** (0.930 nested; **0.941** on new splits) | **chosen:** each member errs on different batches |
+
+![Improvements tried](docs/figures/improvements.png)
+
+**State-of-the-art and other ideas tried on top of the ensemble.** Each is scored on the same new
+splits (s = 50–53, 4 repeats). The column shows the change against the exact ensemble it was added to.
+
+| Idea | Change | Why it did not help (or did) |
+|---|---|---|
+| Nested hyperparameter search (81 settings; earlier on the one-class SVM: grid, random, Bayesian, genetic, particle swarm) | 0.000 | the best settings changed from fold to fold; the defaults already sit on the plateau |
+| **TabPFN 3.5** (pretrained tabular foundation model, GPU) | −0.010 as a member; 0.909 alone | with 40 rejects it has no edge over an SVM, and it adds noise to the average |
+| **MiniRocket** (time-series SOTA) | −0.006; −0.003 on the most volatile sensors only | the reject signal is spread over the whole batch, not a temporal pattern |
+| Trained on samples, not batches (trees, batch decided by the 75th percentile) | −0.006 | samples from one batch are not independent; the label belongs to the batch |
+| Physics features (flow/pressure, pressure drops, ΔT, mass flow); volatility features | −0.006; −0.011 | more columns dilute the SVM/kNN distances and add no new information |
+| SMOTE synthetic rejects | −0.006 | the classes overlap, so interpolated "rejects" land among accepted batches |
+| Sensor-dropout rows removed | −0.002 | fixes the one known false alarm but moves others |
+| Subagging with out-of-bag cut-off | +0.007, then −0.002 on new splits | did not hold up: noise |
+| Calibrated cut-off (Platt, F1-optimal rule) | +0.001 | already optimal; the decisions don't change |
+| **Self-training on unlabelled test batches** | +0.002; +0.007 with a test-sized pool | **adopted:** on the hidden test, F1 0.931 → 0.939 |
+| Self-training + subagging | +0.002 to +0.008 | rejected by a label-free check: it flagged 26 test batches where ~40 rejects are expected |
+
+## What is new in our approach
+
+1. **Self-training on the unlabelled test batches.** Simulated on calibration data first, submitted
+   once, then confirmed on the hidden test: two false alarms removed, no reject lost.
+2. **Every decision comes with a confidence you can check and a route** (`make report`).
+   - **P(rejected) is calibrated out of fold.** Predicted 0.03 / 0.14 / 0.68 / 0.94 vs observed
+     0.04 / 0.16 / 0.83 / 0.88.
+   - **124 of 161 A batches are decided automatically; 37 go to a person.** A batch goes to review
+     when:
+     - P(rejected) is between 0.2 and 0.8;
+     - the models disagree (out of fold this group was 22 % of batches but held 45 % of the errors);
+     - a sensor fault is likely; or
+     - a reject has no close precedent.
+   - **Both batches later confirmed as false alarms (A_148, A_286) were in that review queue.**
+3. **A sensor fault is not a process fault.** A_216 is rejected, but it has 52 sensor-dropout rows
+   and none of the 5 most similar past batches was rejected, so the instrument should be checked first.
+4. **Process B beyond 100 %.** Every team scores 1.000 on B. We add:
+   - a rule an engineer can verify, with the onset step;
+   - a monitor trained on accepted batches only, for faults never seen;
+   - review flags for batches started outside the calibrated range.
+5. **Label-free sanity checks before any submission.** One is the expected number of rejects
+   (calibration share × test size). It stopped a variant that looked better in simulation.
+6. **We worked out what the metric scores** (accepted-class F1) from the leaderboard figures, and
+   tuned every cut-off for it.
+
+![Confidence and routing](docs/figures/confidence.png)
+
+**Example rows from `outputs/<time>_batch_report.csv`:**
+
+| Batch | Label | P(rejected) | Models | Similar past batches rejected | Note / reason |
+|---|---|---|---|---|---|
+| A_001 | rejected | 0.97 | all 3 agree | 4 of 5 | temperature_1 spread; accepted-only monitor also flags temperature_1 |
+| A_154 | rejected | 0.91 | disagree → review | 5 of 5 | pressure_2 level |
+| A_216 | rejected | 0.85 | disagree → review | 0 of 5 | possible sensor fault (52 dropout rows); new pattern |
+| A_148 | accepted | 0.37 | disagree → review | 3 of 5 | confirmed false alarm in our first submission |
+| B_008 | rejected | high | rule | — | aeration 30 % off its own level for 751 steps from step 500 |
+| B_026 | accepted | high | review | — | started outside calibrated volume; own aeration steady (max 0.15 %) |
+
+## How we reached 0.939 with two submissions
+
+- **Models are close, so we chose by repeated CV, not by single splits or the leaderboard.** For
+  example, the chosen ensemble scores 0.941 on new splits and a rank average of the same three members
+  0.935. That gap is about one batch, while one 161-batch test draw moves F1 by ±0.02.
+- **Submission 1 (the ensemble).** CV predicted 30.8 rejects caught and 5.2 false alarms; the hidden
+  test gave 30 and 6: **F1 0.931**.
+- **Submission 2 (+ self-training).** Simulation predicted fewer false alarms (4.8); the hidden test
+  gave 30 and 4: **F1 0.939**.
+- **We stopped there on purpose.** With calibrated P(rejected), flipping a batch only pays above
+  about 0.53. Our lowest flagged batch is at 0.59 and our highest unflagged batch at 0.44, so any
+  further change lowers the expected F1.
+- **Not done:** no probing of the leaderboard for labels. The test batches were used only without
+  labels, through self-training, as the organisers allowed.
+
+## Reproduce
 
 ```bash
-make setup          # Renku: editable install + git hooks (re-run every new session); use `make setup-local` elsewhere
-make data           # stage challenge data into data/raw (once per machine)
-cp .env.example .env  # add leaderboard team name / token
-make check          # ruff + pytest
-make predict        # LEADERBOARD FILE (python -m brpmm.predict) -> outputs/<time>_A-ensemble_B-pca_NOT-SUBMITTED.csv
-make monitor        # accepted-only solution (round 2) -> outputs/<time>_monitor.csv + .json
-make evaluate       # every method on the shared CV protocol -> findings report
-make select         # evidence for the A model (~2 min) -> outputs/process_A/final_selection.json
-make tune           # nested tuning + extra views (~25 min) -> outputs/process_A/tuning/
-make eda-a          # process A data analysis -> outputs/process_A/eda/REPORT.md
+make setup-local     # editable install + git hooks (on Renku: make setup)
+make data            # stage the challenge data into data/raw (never committed)
+make check           # ruff + 67 tests
+python scripts/predict_self_training.py --only self_training_accepted_m1.0   # final leaderboard file
+make report          # per-batch label, P(rejected), reasons, review route
+make monitor         # accepted-only solution, A and B
+make figures         # the figures above, into docs/figures/
+make predict         # first submission (ensemble without self-training)
+make tune tune-semi  # the experiments behind "Approaches compared" (~75 min)
 ```
 
-Nothing is ever submitted automatically; `brpmm.submission.submit` is a separate, deliberate step.
-
-```python
-from brpmm.data import load_calibration, load_test
-
-ts, labels = load_calibration("B")  # long format: batch_id, t, sensors...
-```
-
-## Results
-
-| | Model | Calibration CV (F1, accepted positive) | Leaderboard |
-|---|---|---|---|
-| A | `methods.ensemble`: RBF SVM + kNN on PCA + one-class SVM on 22 median/std features | 0.941 ± 0.002 (fresh splits) | **0.931** |
-| B | `methods.pca_mspc` on accepted batches (same 5 rejects as the aeration rule) | 1.000 | **1.000** |
-| A, accepted only | `scripts/monitor.py`: PCA + kNN monitors | ROC-AUC 0.842; catches 46 % at 94 % specificity | not scored |
-| B, accepted only | `process_b`: aeration rule + PCA monitor with review flags | 1.000, 5/5, 0 false alarms | not scored |
-
-Every model, its validation type and its score: `docs/model_results.md`.
+Nothing is submitted automatically.
 
 ## Layout
 
 ```
-src/brpmm/        reusable code
-  config.py         paths (data/raw first, then Renku input-data, then challenge_docs) + model/CV settings
-  data.py           load calibration/test time series + labels
-  submission.py     build / validate / submit leaderboard files
-  -- leaderboard pipeline --
-  features.py       batch features: level, shape, within-batch correlations (243 A / 393 B)
-  methods.py        every compared method as fit / score / explain; final A `ensemble`
-  evaluate.py       the shared CV protocol (seeds 42+r, 5x5 folds, inner 3-fold cut-off)
-  metrics.py        leaderboard F1 on label strings (accepted = positive)
-  predict.py        final models on all calibration data -> submission + per-batch details
-  report.py         findings report
-  -- accepted-only monitoring, analysis and evidence --
-  prepare.py        stage raw data into data/raw
-  preprocessing.py  segmentation (start/steady/end), gross-outlier mask, quality report
-  steady_features.py steady-state batch features + model-space transforms
-  mspc.py, novelty.py  accepted-only monitors: PCA (T², SPE, contributions), kNN distance
-  rules.py, process_b.py  process B: aeration rule + accepted-only monitor with review flags
-  models.py         alternative A ensembles compared against the submitted one (SETTINGS)
-  evaluation.py     CV tools: nested thresholds, bootstrap, permutation, importance
-docs/model_results.md  team registry of every model and its validated score
-scripts/
-  monitor.py          accepted-only monitoring for A and B (round 2)
-  select_final_a.py   submitted A model vs its alternatives, fresh splits
-  tune_process_a.py   nested hyperparameter search; extra views under the same rule
-  eda_process_a.py    process A data analysis report + figures
-  dashboard_process_a.py  datasets for the interactive analysis page
-notebooks/        exploration — prefix with initials + number, e.g. 01_mv_eda_process_b.ipynb
-tests/            pytest, synthetic data only
-data/             gitignored: raw/ (staged challenge data), processed/ (feature tables)
-outputs/          gitignored; reports, figures, timestamped submissions
-challenge_docs/   gitignored; local copy of the brief + data (not shared via git)
+src/brpmm/
+  data.py, features.py        load batches; per-batch features
+  methods.py, evaluate.py     every model as fit/score/explain; the shared CV protocol
+  metrics.py, predict.py      scored F1 (accepted positive); final models -> submission file
+  self_training.py            self-training on unlabelled batches
+  process_b.py, rules.py      process B: aeration rule + accepted-only monitor
+  mspc.py, novelty.py         accepted-only monitors: PCA (T², SPE, contributions), kNN distance
+  preprocessing.py            segmentation, sensor-dropout mask, data-quality report
+  evaluation.py               nested cut-offs, bootstrap, subagging, permutation importance
+scripts/                      predict_self_training, batch_report, monitor, figures, tuning and EDA
+docs/model_results.md         every model tried, its validation and score
+docs/figures/                 figures in this README
+tests/                        pytest on synthetic data
 ```
 
-## Conventions
-
-- Code that more than one notebook needs goes in `src/brpmm`. Notebooks import it and don't copy it.
-- Notebook outputs are stripped on commit (nbstripout) and files over 1 MB are blocked (pre-commit).
-- Every leaderboard submission is saved via `brpmm.submission.save_submission`. Write down what produced it.
-
-## Scoring
-
-Score = mean of the per-process F1 (A and B weighted equally). The brief says F1 is for the
-rejected class, but every leaderboard entry's accuracy, precision and recall solve to **120
-batches in the scored class** of the 161-batch A test set (calibration: 121 accepted, 40 rejected;
-test features match calibration). So the F1 on the leaderboard behaves as **F1 of the accepted
-class**: a missed reject and a false alarm cost about the same, and predicting "all accepted"
-already scores 0.854 on A. Our own submission confirmed it: its returned accuracy, precision and
-recall fit only this reading (30 of 41 rejects caught, 6 of 120 good batches thrown away).
-`brpmm.metrics.leaderboard_f1` and `brpmm.evaluation` (`f1_accepted`) compute it identically
-(tests/test_metric_alignment.py).
-
----
-
-## Getting started in the SDSC STEM4Health Hackathon
-
-Welcome to the SDSC STEM4Health Hackathon! This git repository is your team's shared codebase: use it to keep your code in sync and under version control.
-
-It contains an `environment.yml` file listing the packages your session starts with, including pandas, numpy, scikit-learn, plotly, transformers and LangChain. Apart from that, the repository is yours: organise it however suits your team.
-
-&nbsp;
-
-## 1. Start working
-
-### 1.1 Launch a session
-On your project page, in the **Launchers** section, click the green **Launch** button. Choose **JupyterLab** or **VSCodium**, whichever you prefer.
-
-&nbsp;
-
-### 1.2 Access the input data
-Your session has an `input-data` folder with one subfolder per challenge. Use the data for the challenge your team is working on.
-
-> **Note:** Don't commit the input data to the repository. Read it straight from `input-data`.
-
-&nbsp;
-
-### 1.3 Connect to GitHub
-To push your work, connect your Renku account to your GitHub account (see the [Renku documentation](https://docs.renkulab.io/)). You already have access to the repository we created for your team. It is cloned into your session automatically.
-
-&nbsp;
-
-### 1.4 Organise your repository
-You choose the structure. For example:
-
-```bash
-.
-├── environment.yml
-├── notebooks/
-├── src/
-├── outputs/
-└── README.md
-```
-
-Agree on the layout with your team early on. That way everyone knows where to put their files.
-
-&nbsp;
-
-### 1.5 Work with your team using git
-Everyone works in their own session and shares work through the repository:
-
-```bash
-git pull                        # get your teammates' latest changes
-git add <files>
-git commit -m "Short description of your change"
-git push                        # share your changes
-```
-
-Tips:
-- Pull before you start working, and push often.
-- To avoid conflicts, try not to edit the same notebook as a teammate at the same time.
-- Keep large files (data, model weights) out of git in the team-workspace folder.
-
-> **Important:** Anything you don't commit and push is lost when the session shuts down.
-
-&nbsp;
-
-### 1.6 Add or change packages
-**Quick test (temporary):** install a package from a terminal or notebook cell:
-
-```bash
-pip install <package-name>
-```
-
-These packages are lost when the session shuts down.
-
-**Permanent (for the whole team):** add the package to `environment.yml`, then commit and push. Rebuild the session environment from your launcher, and every **new** session will include it.
-
-```yaml
-dependencies:
-  - pandas
-  - <new-conda-package>
-  - pip:
-      - <new-pip-package>
-```
-
-&nbsp;
-
-### 1.7 Use AI coding assistants (optional)
-Your session comes with several AI coding assistants. They all run in the terminal:
-
-| Assistant | Command |
-|---|---|
-| GitHub Copilot CLI | `copilot` |
-| Claude Code | `claude` |
-| OpenAI Codex CLI | `codex` |
-| Pi | `pi` |
-
-1. Open a **Terminal** in your session.
-2. Run the command for the assistant you want to use, for example:
-   ```bash
-   copilot
-   ```
-3. When prompted, sign in with your own account or API key for that tool. Access and any usage costs go through your own account.
-
-> **Note:** These sign-ins are separate from your Renku login. Sign-ins may not survive a session shutdown, so you might need to sign in again.
-
-&nbsp;
-
-### 1.8 Change your compute resources
-If you need more CPU, or more memory or a GPU:
-
-1. **Pause** your session (top-left corner). Your files and changes are kept.
-2. From the dropdown on the launcher button, choose **Modify session resources**.
-3. Select a larger resource class and confirm.
-4. **Resume** the session.
-
-To change the resources for all future sessions, edit the **Default Resource Class** in your launcher (click the pencil icon). To change them for a single new session, use the dropdown next to **Launch** and choose **Custom launch**.
-
-See the [Renku documentation](https://docs.renkulab.io/en/latest/docs/users/compute/guides/select-compute-resources-for-session/) for details.
-
-&nbsp;
-
-## 2. Pause or shut down your session
-
-Sessions keep running when you close your browser. Please free up resources when you finish:
-
-* **Pause session** (top-left corner): your workspace is kept for two weeks. Sessions also pause automatically after 30 minutes of inactivity.
-
-![Pause button](https://raw.githubusercontent.com/SwissDataScienceCenter/renku-outreach/refs/heads/main/tutorial/pause_button.jpeg)
-
-&nbsp;
-
-* **Shut down session** (top-left corner): only work you have **committed and pushed** to the repository is kept. Everything else is lost.
-
-![Shut down button](https://raw.githubusercontent.com/SwissDataScienceCenter/renku-outreach/refs/heads/main/tutorial/shutdown_button.jpeg)
-
-> **Important:** Even paused sessions can end unexpectedly. **Commit and push regularly.**
-
-&nbsp;
-
-## Need help?
-Ask the SDSC coordinators or the Renku team on site, or write to `hello@renku.io` with the subject *[SDSC STEM4Health] Your topic*.
+Data, outputs and the challenge documents are gitignored. Renku session instructions: [docs/renku.md](docs/renku.md).
