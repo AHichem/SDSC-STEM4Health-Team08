@@ -21,6 +21,7 @@ dependencies = [
     "matplotlib",
     "requests",
     "python-dotenv",
+    "tabulate",  # DataFrame.to_markdown in scripts/batch_report.py
 ]
 
 [project.optional-dependencies]

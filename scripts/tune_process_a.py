@@ -6,6 +6,11 @@ submitted ensemble? Calibration data only.
     python scripts/tune_process_a.py --part clean     # ~2 min: her ensemble on cleaned batches
     python scripts/tune_process_a.py --part augment   # ~2 min: synthetic rejects for the SVM member
     python scripts/tune_process_a.py --part tabpfn    # ~15 min: pip install -e ".[tabpfn]"
+    python scripts/tune_process_a.py --part semi      # ~3 min: self-training on unlabelled batches
+    python scripts/tune_process_a.py --part semi_half # ~2 min: same, unlabelled pool = labelled size
+    python scripts/tune_process_a.py --part rules     # ~15 min: cut-off rules, subagging
+    python scripts/tune_process_a.py --part rules_confirm  # same on new splits s = 60..63
+    python scripts/tune_process_a.py --part rules_half     # same, 2 folds
 
 Every part uses the fresh splits of scripts/select_final_a.py (StratifiedKFold(5, shuffle, s),
 s = 50..53) so every number is comparable with the submitted model's 0.941 there. The test
@@ -23,6 +28,19 @@ augment  The supervised SVM member trained on rejects multiplied synthetically i
          training fold: SMOTE (interpolation between rejects) or jittered copies (noise 0.1 sd).
 tabpfn   TabPFN, a pretrained transformer for small tabular data: alone, as a fourth member of
          the re-implemented ensemble, and (v2+) as a fourth member of the submitted ensemble.
+semi     Semi-supervised self-training, simulated: each held-out fold plays the unlabelled test
+         set. The submitted ensemble labels the held-out batches it is confident about (score
+         beyond its cut-off by a margin), adds them to training with those pseudo-labels, picks
+         a new cut-off and scores the fold. Real test data is never used. semi_half uses 2
+         folds, so the unlabelled pool is as large as the labelled set (as with the real
+         161 test batches); its numbers compare only with its own "submitted" row.
+rules    How the cut-off is set, and variance reduction, around the unchanged ensemble: the
+         final-fit rule (median of 5 x 5-fold cut-offs, brpmm.predict.cv_cutoff), one cut-off
+         on the pooled 5 x 5 out-of-fold scores, Platt-calibrated P(rejected) with the
+         F1-optimal rule P(accepted) > F*/2, subagging (25 ensembles on stratified 80 %
+         subsamples, cut-off on out-of-bag scores), and self-training (confident accepted,
+         margin 1.0) with and without subagging. rules_confirm re-runs it on splits never
+         used before; rules_half uses 2 folds like semi_half.
 The dropout detector's noise scale is fitted on all calibration batches without labels.
 Writes outputs/process_A/tuning/<part>.json.
 """
@@ -40,15 +58,20 @@ from importlib.metadata import version
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold
 
 import brpmm.evaluate as maria_eval
 import brpmm.methods as maria
 from brpmm.config import (
+    CV_FOLDS,
+    CV_REPEATS,
     ENSEMBLE_KNN_K,
+    LABEL_ACCEPTED,
     LABEL_REJECTED,
     OCSVM_NU,
     OUTPUTS_DIR,
+    SEED,
     SVM_C,
     SVM_GAMMA_MULT,
 )
@@ -57,6 +80,7 @@ from brpmm.evaluation import (
     FRESH_SEEDS,
     leaderboard_summary,
     repeated_cv,
+    subagged,
     submitted_ensemble_decisions,
     tuned_threshold,
 )
@@ -392,12 +416,134 @@ def part_tabpfn() -> dict:
     return {**record, **run_candidates(candidates, X, y)}
 
 
+def part_semi(n_splits: int = 5) -> dict:
+    X, labels = maria_eval.load_features("A")
+    y = (labels == LABEL_REJECTED).astype(int).to_numpy()
+    fit, score = maria.fit_ensemble, maria.score_ensemble
+    variants = {  # (which pseudo-labels to add, margin in ensemble-score units around the cut-off)
+        "submitted (labelled batches only)": None,
+        "self-training, both classes, margin 0.5": ("both", 0.5),
+        "self-training, both classes, margin 1.0": ("both", 1.0),
+        "self-training, both classes, margin 2.0": ("both", 2.0),
+        "self-training, confident accepted only, margin 1.0": ("accepted", 1.0),
+    }
+    dec = {name: [] for name in variants}
+    added = {name: [] for name in variants}
+    for s in FRESH_SEEDS:
+        rep_dec = {name: np.zeros(len(X), int) for name in variants}
+        folds = StratifiedKFold(n_splits, shuffle=True, random_state=s).split(X, labels)
+        for k, (tr, te) in enumerate(folds):
+            Xtr, ytr, Xte = X.iloc[tr], labels.iloc[tr], X.iloc[te]
+            cut_seed = s + 1000 + k  # harness cut-off seed: with 5 folds "submitted" gives 0.941
+            cut = maria_eval._inner_cutoff(fit, score, Xtr, ytr, seed=cut_seed)
+            s_te = score(fit(Xtr, ytr), Xte)
+            for name, variant in variants.items():
+                if variant is None:
+                    rep_dec[name][te] = s_te > cut
+                    continue
+                kind, margin = variant
+                sure_rej = s_te > cut + margin if kind == "both" else np.zeros(len(te), bool)
+                sure_acc = s_te < cut - margin
+                pick = sure_rej | sure_acc
+                pseudo = pd.Series(
+                    np.where(sure_rej, LABEL_REJECTED, maria.LABEL_ACCEPTED), index=Xte.index
+                )[pick]
+                Xa, ya = pd.concat([Xtr, Xte[pick]]), pd.concat([ytr, pseudo])
+                cut_a = maria_eval._inner_cutoff(fit, score, Xa, ya, seed=cut_seed)
+                rep_dec[name][te] = score(fit(Xa, ya), Xte) > cut_a
+                added[name].append(int(pick.sum()))
+        for name in variants:
+            dec[name].append(rep_dec[name])
+    out = {}
+    for name in variants:
+        out[name] = summary(np.array(dec[name]), y)
+        if added[name]:
+            out[name]["pseudo_labelled_per_fold"] = round(float(np.mean(added[name])), 1)
+        print(f"  {name:52s} {out[name]}", flush=True)
+    return out
+
+
+def _oof(fit, score, X: pd.DataFrame, y: pd.Series, seed: int) -> np.ndarray:
+    o = np.empty(len(X))
+    for tr, te in StratifiedKFold(CV_FOLDS, shuffle=True, random_state=seed).split(X, y):
+        o[te] = score(fit(X.iloc[tr], y.iloc[tr]), X.iloc[te])
+    return o
+
+
+def _confident_accepted(X, y, Xte, s_te, cut, margin=1.0):
+    sure = s_te < cut - margin
+    pseudo = pd.Series(LABEL_ACCEPTED, index=Xte.index[sure])
+    return pd.concat([X, Xte[sure]]), pd.concat([y, pseudo])
+
+
+def part_rules(seeds=FRESH_SEEDS, n_splits: int = 5) -> dict:
+    X, labels = maria_eval.load_features("A")
+    y = (labels == LABEL_REJECTED).astype(int).to_numpy()
+    fit, score = maria.fit_ensemble, maria.score_ensemble
+    names = [
+        "submitted (inner 3-fold cut-off, evaluation harness)",
+        "median of 5 x 5-fold cut-offs (final-fit rule)",
+        "one cut-off on pooled 5 x 5 out-of-fold scores",
+        "Platt P(rejected), accept if P(accepted) > F*/2",
+        "subagging 25 x 80 %, out-of-bag cut-off",
+        "self-training (accepted, margin 1.0), final-fit rule",
+        "self-training (accepted, margin 1.0) + subagging",
+    ]
+    dec = {name: [] for name in names}
+    for s in seeds:
+        rep = {name: np.zeros(len(X), int) for name in names}
+        folds = StratifiedKFold(n_splits, shuffle=True, random_state=s).split(X, labels)
+        for k, (tr, te) in enumerate(folds):
+            Xtr, ytr, Xte = X.iloc[tr], labels.iloc[tr], X.iloc[te]
+            s_te = score(fit(Xtr, ytr), Xte)
+            c0 = maria_eval._inner_cutoff(fit, score, Xtr, ytr, seed=s + 1000 + k)
+            oofs = [_oof(fit, score, Xtr, ytr, SEED + r) for r in range(CV_REPEATS)]
+            c1 = float(np.median([maria_eval.choose_cutoff(o, ytr) for o in oofs]))
+            pooled, ypool = np.concatenate(oofs), pd.concat([ytr] * CV_REPEATS)
+            c2 = maria_eval.choose_cutoff(pooled, ypool)
+            platt = LogisticRegression(C=1e6).fit(pooled[:, None], ypool == LABEL_REJECTED)
+            f_star = leaderboard_f1(ypool, maria_eval._labels(pooled, c2))
+            p_acc = 1 - platt.predict_proba(s_te[:, None])[:, 1]
+            c4, s4 = subagged(fit, score, Xtr, ytr, Xte, n_bags=25, seed=s * 10 + k)
+            Xa, ya = _confident_accepted(Xtr, ytr, Xte, s_te, c1)
+            c5 = float(
+                np.median(
+                    [
+                        maria_eval.choose_cutoff(_oof(fit, score, Xa, ya, SEED + r), ya)
+                        for r in range(CV_REPEATS)
+                    ]
+                )
+            )
+            s5 = score(fit(Xa, ya), Xte)
+            Xb, yb = _confident_accepted(Xtr, ytr, Xte, s4, c4)
+            c6, s6 = subagged(fit, score, Xb, yb, Xte, n_bags=25, seed=s * 10 + k + 5)
+            for name, d in zip(
+                names,
+                [s_te > c0, s_te > c1, s_te > c2, p_acc <= f_star / 2, s4 > c4, s5 > c5, s6 > c6],
+                strict=True,
+            ):
+                rep[name][te] = d
+            print(f"  seed {s} fold {k}", flush=True)
+        for name in names:
+            dec[name].append(rep[name])
+    out = {"seeds": list(seeds), "folds": n_splits}
+    for name in names:
+        out[name] = summary(np.array(dec[name]), y)
+        print(f"  {name:56s} {out[name]}", flush=True)
+    return out
+
+
 PARTS = {
     "hpo": part_hpo,
     "combine": part_combine,
     "clean": part_clean,
     "augment": part_augment,
     "tabpfn": part_tabpfn,
+    "semi": part_semi,
+    "semi_half": lambda: part_semi(n_splits=2),
+    "rules": part_rules,
+    "rules_confirm": lambda: part_rules(seeds=(60, 61, 62, 63)),
+    "rules_half": lambda: part_rules(n_splits=2),
 }
 
 
