@@ -2,7 +2,7 @@
 
 Layer 1, decision: ``SetpointDeviationRule`` on aeration_rate, relative to each
 batch's own early level. Calibration: 5/5 rejects caught, 0/35 false alarms;
-accepted batches never deviate more than 0.36 % from their own level.
+accepted calibration batches never deviate more than 0.35 % from their own level.
 
 Layer 2, review: a PCA monitor fitted on accepted batches only. It catches the
 known fault too (AUC 1.0 in CV) and would also flag fault types the rule has

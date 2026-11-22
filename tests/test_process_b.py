@@ -45,3 +45,8 @@ def test_rule_decides_and_monitor_only_flags_for_review():
     assert out.loc["new_condition", "label"] == "accepted"  # new operating point is not a fault
     assert "aeration_rate" in out.loc["new_condition", "start_outside_calibration"]
     assert out.loc["normal", "label"] == "accepted"
+    # a monitor alarm on an accepted batch is a review flag; a rejected batch is never "review"
+    assert out.loc["new_condition", "monitor_alarm"]
+    assert out.loc["new_condition", "review"]
+    assert not out.loc["fault", "review"]
+    assert not out.loc["normal", "review"]

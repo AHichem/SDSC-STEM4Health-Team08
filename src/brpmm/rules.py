@@ -2,7 +2,7 @@
 
 Process B (fed-batch fermentation): every rejected calibration batch shows the
 same fault, aeration falling to 0.70x of the batch's *own* early level for
-steps 500-1250 (751 samples), while every accepted batch stays within 0.35% of
+steps 500-1250 (751 samples), while every accepted batch stays within 0.35 % of
 its own level. The absolute level differs a lot between good batches (about 4.8
 to 8.1), so the rule compares each batch with itself, not with a global range.
 """
@@ -22,7 +22,7 @@ from brpmm.data import TIME_COL
 class SetpointDeviationRule:
     variable: str = "aeration_rate"
     baseline_steps: int = 500  # the batch's own reference level: median of its first N steps
-    rel_tolerance: float = 0.10  # deviations up to 10% are normal (accepted max: 0.35%)
+    rel_tolerance: float = 0.10  # deviations up to 10 % are normal (accepted max: 0.35 %)
     min_run: int = 100  # consecutive samples beyond tolerance needed to reject (faults: 751)
 
     def evaluate(self, ts: pd.DataFrame) -> pd.DataFrame:
