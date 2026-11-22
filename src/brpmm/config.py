@@ -13,10 +13,14 @@ PROCESSES: tuple[Process, ...] = ("A", "B")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS_DIR = REPO_ROOT / "outputs"
+DATA_DIR = REPO_ROOT / "data"
+RAW_DIR = DATA_DIR / "raw"  # staged copy of the challenge folder (python -m brpmm.prepare)
+PROCESSED_DIR = DATA_DIR / "processed"  # derived tables, e.g. batch features
 
 load_dotenv(REPO_ROOT / ".env")
 
-_DATA_DIR_CANDIDATES = (
+# Where the organisers' copy can live; brpmm.prepare stages it into RAW_DIR.
+EXTERNAL_DATA_DIRS = (
     Path("/home/renku/work/input-data/Project 2 - BRPMM"),
     REPO_ROOT / "challenge_docs" / "input-data" / "Project 2 - BRPMM",
 )
@@ -26,18 +30,33 @@ LABEL_REJECTED = "rejected"
 BATCH_COL = "batch_id"
 
 
+def _is_challenge_dir(path: Path) -> bool:
+    return (path / "process A").is_dir() and (path / "process B").is_dir()
+
+
+def external_data_dir() -> Path:
+    """First organiser-provided data folder that exists (the source for staging)."""
+    for path in EXTERNAL_DATA_DIRS:
+        if _is_challenge_dir(path):
+            return path
+    tried = "\n  ".join(str(p) for p in EXTERNAL_DATA_DIRS)
+    raise FileNotFoundError(f"Challenge data not found. Tried:\n  {tried}")
+
+
 def data_dir() -> Path:
-    """Return the challenge data folder (``BRPMM_DATA_DIR`` overrides the defaults)."""
+    """Return the challenge data folder.
+
+    Order: ``BRPMM_DATA_DIR`` env var, the staged copy in ``data/raw``, then the
+    organiser locations.
+    """
     if env := os.getenv("BRPMM_DATA_DIR"):
         path = Path(env)
         if not path.is_dir():
             raise FileNotFoundError(f"BRPMM_DATA_DIR={env!r} does not exist")
         return path
-    for path in _DATA_DIR_CANDIDATES:
-        if path.is_dir():
-            return path
-    tried = "\n  ".join(str(p) for p in _DATA_DIR_CANDIDATES)
-    raise FileNotFoundError(f"Challenge data not found. Set BRPMM_DATA_DIR. Tried:\n  {tried}")
+    if _is_challenge_dir(RAW_DIR):
+        return RAW_DIR
+    return external_data_dir()
 
 
 # ---- Evaluation and model settings (used by features / methods / evaluate / report) ----
