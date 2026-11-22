@@ -162,6 +162,78 @@ Saved: `outputs/20261121-181628_A-ensemble_B-pca_NOT-SUBMITTED.csv` (+ `_details
   The 5 rejected show the known fault (aeration −30 % at samples 500–1250); the other 35 show none.
   Gap in score: highest normal 3.2 vs lowest fault 490,000, so the split is safe.
 
+## Round of 22 Nov: leaderboard result, re-validation and tuning (A33–A49, B12)
+
+**Leaderboard (A24 submitted as Team 08):** A accuracy 0.894, precision 0.912, recall 0.95, F1 **0.931**. Only one
+reading of those numbers fits: accepted is the positive class, 120 accepted / 41 rejected test batches, and our
+file caught **30 of 41** rejects, missed 11, threw away **6 of 120** good batches. Cross-validation predicted 30.8 / 40
+and 5.2 / 121, so the protocol is a reliable guide. Team 13 (0.939) had the same 11 misses and 4 false alarms.
+
+**Fresh splits:** the rows below use `StratifiedKFold(5, shuffle, s)` for s = 50..53, never used to choose a
+model, with an inner 3-fold cut-off; A24 scores 0.941 there (0.943 on seeds 42..46). A35–A37 add views to the
+re-implemented members, whose own score under the z-score rule is 0.938 (implementation detail vs A24).
+
+| id | model | trained on | features | validation | F1 | ± | prec. | recall | acc. | bad caught | good thrown away | code |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A24 | `ensemble` (submitted) | accepted + rejected | 22 median+std | cv, fresh splits | 0.941 | 0.002 | 0.926 | 0.957 | 0.911 | 30.8 / 40 | 5.2 / 121 | methods.py: ensemble |
+| A33 | `ensemble` re-tuned in inner CV | accepted + rejected | 22 median+std | nested cv, fresh splits | 0.941 | 0.002 | 0.928 | 0.955 | 0.910 | 31.0 / 40 | 5.5 / 121 | scripts/tune_process_a.py --part hpo |
+| A34 | same members, rank average | accepted + rejected | 22 median+std | cv, fresh splits | 0.935 | 0.003 | 0.906 | 0.967 | 0.899 | 27.8 / 40 | 4.0 / 121 | models.py: team_members + rank_average |
+| A35 | members + MiniRocket (z-score rule) | accepted + rejected | 22 median+std + trajectory | cv, fresh splits | 0.932 | 0.006 | 0.918 | 0.946 | 0.896 | 29.8 / 40 | 6.5 / 121 | scripts/tune_process_a.py --part combine |
+| A36 | members + sample-level trees | accepted + rejected | 22 median+std + samples | cv, fresh splits | 0.932 | 0.003 | 0.916 | 0.949 | 0.896 | 29.5 / 40 | 6.2 / 121 | scripts/tune_process_a.py --part combine |
+| A37 | members + both views | accepted + rejected | 22 + trajectory + samples | cv, fresh splits | 0.937 | 0.002 | 0.920 | 0.955 | 0.904 | 30.0 / 40 | 5.5 / 121 | scripts/tune_process_a.py --part combine |
+| A38 | `ensemble`, dropout rows removed | accepted + rejected | 22 median+std (cleaned) | cv, fresh splits | 0.939 | 0.004 | 0.926 | 0.952 | 0.907 | 30.8 / 40 | 5.8 / 121 | tune_process_a.py --part clean |
+| A39 | `ensemble`, dropouts + transients removed | accepted + rejected | 22 median+std (steady) | cv, fresh splits | 0.938 | 0.004 | 0.912 | 0.965 | 0.904 | 28.8 / 40 | 4.2 / 121 | tune_process_a.py --part clean |
+
+**Synthetic rejects and a pretrained model (fresh splits; baseline: re-implemented members, z-score rule, 0.938):**
+
+| id | model | trained on | features | validation | F1 | ± | prec. | recall | acc. | bad caught | good thrown away | code |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A41 | members, SVM trained on SMOTE-enlarged rejects (z-score rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.932 | 0.007 | 0.919 | 0.944 | 0.896 | 30.0 / 40 | 6.8 / 121 | tune_process_a.py --part augment |
+| A42 | members, SVM trained on jittered reject copies (z-score rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.939 | 0.007 | 0.926 | 0.952 | 0.907 | 30.8 / 40 | 5.8 / 121 | tune_process_a.py --part augment |
+| A43 | SVM alone on SMOTE-enlarged rejects (vs 0.932 without) | accepted + rejected | 22 median+std | cv, fresh splits | 0.907 | 0.018 | 0.895 | 0.919 | 0.858 | 27.0 / 40 | 9.8 / 121 | tune_process_a.py --part augment |
+| A44 | TabPFN v1 alone (pretrained transformer for small tables) | accepted + rejected | 22 median+std | cv, fresh splits | 0.895 | 0.020 | 0.890 | 0.901 | 0.842 | 26.5 / 40 | 12.0 / 121 | tune_process_a.py --part tabpfn |
+| A45 | members + TabPFN v1 (z-score rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.933 | 0.002 | 0.920 | 0.946 | 0.898 | 30.0 / 40 | 6.5 / 121 | tune_process_a.py --part tabpfn |
+
+- **Synthetic rejects do not help (A41–A43).** SMOTE interpolates between rejects that already sit among
+  accepted batches (72 % have mostly accepted neighbours), so it adds false alarms; jittered copies change nothing.
+- **TabPFN does not help (A44–A45).** v1 (open weights) alone reaches 0.895; as a fourth member it lowers the
+  ensemble. TabPFN v2 needs a Prior Labs licence token and was not tested.
+
+**TabPFN 3.5** (package 10.2.0, checkpoint v3.5, RTX 3050; same splits; the
+submitted ensemble re-ran at 0.941 in the same job):
+
+| id | model | trained on | features | validation | F1 | ± | prec. | recall | acc. | bad caught | good thrown away | code |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A46 | submitted `ensemble` + TabPFN 3.5 as 4th member (her rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.931 | 0.005 | 0.921 | 0.942 | 0.896 | 30.2 / 40 | 7.0 / 121 | tune_process_a.py --part tabpfn |
+| A47 | members (re-implemented) + TabPFN 3.5 (z-score rule) | accepted + rejected | 22 median+std | cv, fresh splits | 0.936 | 0.004 | 0.924 | 0.949 | 0.902 | 30.5 / 40 | 6.2 / 121 | tune_process_a.py --part tabpfn |
+| A48 | TabPFN 3.5 alone, 22 median+std | accepted + rejected | 22 median+std | cv, fresh splits | 0.909 | 0.005 | 0.896 | 0.924 | 0.862 | 27.0 / 40 | 9.2 / 121 | tune_process_a.py --part tabpfn |
+| A49 | TabPFN 3.5 alone, 22 + 90 steady features | accepted + rejected | 22 + 90 steady | cv, fresh splits | 0.894 | 0.003 | 0.879 | 0.911 | 0.839 | 24.8 / 40 | 10.8 / 121 | tune_process_a.py --part tabpfn |
+
+- **TabPFN 3.5 does not help (A46–A49).** As a fourth member it adds about two false alarms per
+  161 batches (5.2 → 7.0) without catching more rejects; alone it stays below the submitted ensemble.
+
+- **The operating point is not the issue.** Out of fold, F1 of A24 is flat for 32–36 flagged batches
+  (0.944–0.946); going from 34 to 36 flags adds on average one caught reject and one false alarm.
+
+- **Tuning does not help (A33).** Each training part chose its own best of 81 settings (SVM C × gamma × kNN k ×
+  one-class nu); the chosen settings changed from fold to fold (the submitted ones in 3 of 20) and the result
+  equals A24. Earlier, grid, random, Bayesian (Optuna), genetic and particle-swarm search of a one-class SVM
+  all matched its defaults on held-out folds (AUC 0.843–0.847 vs 0.850); genetic sensor selection overfitted
+  (inner 0.865, held-out 0.825).
+- **More views do not help (A35–A37)**, nor does cleaning the inputs (A38–A39). Removing dropout rows fixes
+  the one known false alarm (A_239) but moves others; trimming the start and end loses two caught rejects, so
+  the transients carry signal.
+- **Rejects A24 misses in ≥ 3 of 4 repeats:** A_008, A_097, A_100, A_177, A_202, A_242, A_289, A_307. They show
+  higher flow_rate_1 / pressure_1 variability (AUC ≈ 0.85 vs accepted, not significant after Bonferroni over
+  333 features): a hypothesis to check with J&J, not a result.
+
+**Accepted-only solutions (round 2, `scripts/monitor.py`):**
+
+| id | model | trained on | features | validation | result |
+|---|---|---|---|---|---|
+| A40 | `monitor_pca_knn`: mean of PCA (T², SPE) and kNN-distance ratios > 1 | accepted only | 90 steady-state features | cv, seeds 42..46 | F1 0.887, ROC-AUC 0.842, catches 46 % of rejects at 94 % specificity; names the top sensor |
+| B12 | `setpoint_rule_plus_monitor`: aeration > 10 % off its own level for ≥ 100 samples; PCA monitor flags new operating points for review | accepted only (monitor); the rule's 10 % / 100-sample limits were set after inspecting the 5 calibration rejects | aeration_rate vs own baseline; 129 batch features | cv, seed 42 | F1 1.000, 5/5 caught, 0 false alarms; test: same 5 rejects as B02, review B_026, B_029, B_036 |
+
 ## How to add your model (template)
 
 Copy a row into the table of its process and add an object to the JSON list:
@@ -187,6 +259,8 @@ does it for every method registered in `brpmm.methods.METHODS`).
 - Repo (`src/brpmm/`): `features.py`, `methods.py` (all `methods.py:` entries), `evaluate.py` (protocol),
   `metrics.py`, `report.py`. Run: `BRPMM_DATA_DIR=... python -m brpmm.evaluate --process A B`.
 - `scratch/...` entries: experiment scripts on Maria's laptop (not in the repo yet); same splits and seeds.
+- A33–A49, B12: `scripts/select_final_a.py`, `scripts/tune_process_a.py`, `scripts/monitor.py`,
+  `src/brpmm/process_b.py` (results also in `outputs/process_A/final_selection.json` and `tuning/`).
 - Reports with figures: `outputs/report_<timestamp>/report.md` (gitignored). Shared findings doc:
   https://claude.ai/artifact/KX6J8CK1TAMwukKiu17siS
 
