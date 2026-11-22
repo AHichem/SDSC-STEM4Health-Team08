@@ -36,6 +36,7 @@ dependencies:
   - pyod                   # anomaly detection (one-class / accepted-only track)
   - tslearn                # time-series alignment (DTW) & clustering
   - aeon>=1.0              # MiniRocket / MultiRocket time-series transforms
+  - tabulate               # DataFrame.to_markdown (scripts/batch_report.py)
 
   # --- Dev tooling ---
   - pytest

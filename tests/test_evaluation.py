@@ -123,3 +123,46 @@ def test_f1_accepted_prefers_fewer_false_alarms():
     y = np.array([0] * 8 + [1] * 2)
     score = np.array([0.1] * 7 + [0.6] + [0.7, 0.9])
     assert best_threshold(y, score, "f1_accepted") > 0.6
+
+
+def test_subagged_uses_out_of_bag_scores_and_is_reproducible():
+    from brpmm.config import LABEL_ACCEPTED, LABEL_REJECTED
+    from brpmm.evaluation import subagged
+
+    X, y01 = toy()
+    y = pd.Series(np.where(y01 == 1, LABEL_REJECTED, LABEL_ACCEPTED), index=X.index)
+    seen = []
+
+    def fit(Xf, yf):
+        seen.append(set(Xf.index))
+        return LogisticRegression().fit(Xf, yf == LABEL_REJECTED)
+
+    def score(model, Xs):
+        return model.decision_function(Xs)
+
+    cut, s = subagged(fit, score, X, y, X.iloc[:10], n_bags=8, fraction=0.8, seed=1)
+    assert len(seen) == 8 and all(len(b) == int(0.8 * 90) + int(0.8 * 30) for b in seen)
+    np.testing.assert_allclose(subagged(fit, score, X, y, X.iloc[:10], 8, 0.8, 1)[1], s)
+    pred = s > cut
+    assert pred[y01[:10] == 1].mean() > pred[y01[:10] == 0].mean()  # signal survives the cut
+
+
+def test_self_training_adds_only_confident_accepted_batches():
+    from brpmm.config import LABEL_ACCEPTED, LABEL_REJECTED
+    from brpmm.self_training import self_train
+
+    X, y01 = toy(160)
+    y = pd.Series(np.where(y01 == 1, LABEL_REJECTED, LABEL_ACCEPTED), index=X.index)
+    Xl, yl, Xu = X.iloc[:120], y.iloc[:120], X.iloc[120:]
+
+    def fit(Xf, yf):
+        return LogisticRegression().fit(Xf, yf == LABEL_REJECTED)
+
+    def score(model, Xs):
+        return model.decision_function(Xs)
+
+    res = self_train(fit, score, Xl, yl, Xu, kind="accepted", margin=1.0)
+    assert (res.pseudo == LABEL_ACCEPTED).all() and 0 < len(res.pseudo) < len(Xu)
+    assert res.labels.index.equals(Xu.index)
+    caught = (res.labels == LABEL_REJECTED)[y01[120:] == 1].mean()
+    assert caught > (res.labels == LABEL_REJECTED)[y01[120:] == 0].mean()

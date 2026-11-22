@@ -162,7 +162,7 @@ Saved: `outputs/20261121-181628_A-ensemble_B-pca_NOT-SUBMITTED.csv` (+ `_details
   The 5 rejected show the known fault (aeration −30 % at samples 500–1250); the other 35 show none.
   Gap in score: highest normal 3.2 vs lowest fault 490,000, so the split is safe.
 
-## Round of 22 Nov: leaderboard result, re-validation and tuning (A33–A49, B12)
+## Round of 22 Nov: leaderboard result, re-validation and tuning (A33–A57, B12)
 
 **Leaderboard (A24 submitted as Team 08):** A accuracy 0.894, precision 0.912, recall 0.95, F1 **0.931**. Only one
 reading of those numbers fits: accepted is the positive class, 120 accepted / 41 rejected test batches, and our
@@ -212,6 +212,69 @@ submitted ensemble re-ran at 0.941 in the same job):
 - **TabPFN 3.5 does not help (A46–A49).** As a fourth member it adds about two false alarms per
   161 batches (5.2 → 7.0) without catching more rejects; alone it stays below the submitted ensemble.
 
+
+**Semi-supervised self-training (A50–A53), simulated on calibration data only:** each held-out fold
+plays the unlabelled test set; the submitted ensemble pseudo-labels the held-out batches it scores beyond
+its cut-off by a margin, retrains with them and picks a new cut-off. 5 folds add ~32 unlabelled batches
+per fold; 2 folds make the unlabelled pool as large as the labelled set, as with the real 161 test batches.
+
+| id | variant | F1, 5 folds (labelled only: 0.941) | pseudo-labels / fold | F1, 2 folds (labelled only: 0.922) | pseudo-labels / fold |
+|---|---|---|---|---|---|
+| A50 | self-training, both classes, margin 0.5 | 0.944 ± 0.005 | 27.8 | 0.931 ± 0.012 | 65.6 |
+| A51 | self-training, both classes, margin 1.0 | 0.943 ± 0.003 | 21.2 | 0.922 ± 0.009 | 47.8 |
+| A52 | self-training, both classes, margin 2.0 | 0.938 ± 0.006 | 2.6 | 0.930 ± 0.009 | 11.1 |
+| A53 | self-training, confident accepted only, margin 1.0 | 0.943 ± 0.004 | 19.6 | 0.929 ± 0.011 | 42.9 |
+
+- **Self-training gives a small gain, below the +0.01 bar (A50–A53).** +0.002 to +0.003 with 5 folds;
+  up to +0.009 with 2 folds, but not for every margin (margin 1.0: none) and with sd ≈ 0.01. Margin 0.5 is the
+  only setting positive in both; it was picked after seeing these results. Using the real test batches this
+  way needs the organisers' permission (`scripts/tune_process_a.py --part semi` / `semi_half`).
+
+
+**Feature engineering inside the submitted ensemble (A54–A57; `scripts/improve_process_a.py`; base 0.941):**
+
+| id | added to the 22 median/std features | F1 | ± | bad caught | good thrown away |
+|---|---|---|---|---|---|
+| A54 | mechanistic | 0.935 | 0.010 | 29.2 / 40 | 5.2 / 121 |
+| A55 | volatility | 0.930 | 0.006 | 28.8 / 40 | 6.0 / 121 |
+| A56 | mechanistic + volatility | 0.918 | 0.006 | 25.8 / 40 | 6.2 / 121 |
+| A57 | ts member (volatile sensors) | 0.938 | 0.007 | 30.0 / 40 | 5.2 / 121 |
+
+- **More features lower the score (A54–A57).** Each column dilutes the RBF / kNN distances; the
+  mechanistic signals (flow/pressure, pressure drops, temperature differences, mass flow) and volatility
+  measures carry no information the 22 median/std features lack.
+
+**Self-training on the real test batches (allowed by J&J; `scripts/predict_self_training.py`, not submitted):**
+
+- `self_training_accepted_m1.0`: 107 test batches pseudo-labelled (0 as rejected); A rejects 34 (submitted file: 36).
+- `self_training_both_m0.5`: 139 test batches pseudo-labelled (20 as rejected); A rejects 32 (submitted file: 36).
+- **Leaderboard, 22 Nov:** `self_training_accepted_m1.0` submitted → F1(A) 0.939 (was 0.931). Back-calculated:
+  30 of 41 rejects caught, 4 false alarms (was 6), so both batches it un-flagged (A_148, A_286) were false
+  alarms. `self_training_both_m0.5` was not submitted: it re-flags A_286.
+
+**Cut-off rules and variance reduction (A58–A63; `scripts/tune_process_a.py --part rules`, `rules_confirm`,
+`rules_half`).** Same ensemble; only how the cut-off is set, or how many models are averaged, changes.
+F1(accepted), mean of 4 repeats; the 2-fold column (unlabelled pool as large as the training set, as on the
+real test) compares only within itself.
+
+| id | variant | 5-fold, s = 50..53 | 5-fold, s = 60..63 | 2-fold, s = 50..53 |
+|---|---|---|---|---|
+| — | submitted evaluation harness (inner 3-fold cut-off) | 0.941 | 0.944 | 0.922 |
+| A58 | median of 5 × 5-fold cut-offs (`brpmm.predict.cv_cutoff`, the rule the files use) | 0.943 | 0.948 | 0.933 |
+| A59 | one cut-off on the pooled 5 × 5 out-of-fold scores | 0.944 | 0.949 | 0.926 |
+| A60 | Platt-calibrated P(rejected); accept if P(accepted) > F*/2 | 0.944 | 0.949 | 0.934 |
+| A61 | subagging: 25 ensembles on stratified 80 % subsamples, out-of-bag cut-off | 0.951 | 0.946 | 0.925 |
+| A62 | self-training (confident accepted, margin 1.0), A58 rule | 0.946 | 0.946 | 0.929 |
+| A63 | self-training + subagging | 0.951 | 0.950 | 0.935 |
+
+- **No variant gains reliably over A58, the rule already used.** A61's +0.008 did not hold on new splits.
+  A63 is ahead in all three columns, by +0.008, +0.002 and +0.002 (sd 0.004–0.007).
+- **A63 fails a label-free check on the real test.** It flags 26 batches with 50 or 100 bags, 29 with 25,
+  where ~40 rejects are expected (calibration share 40/161). With 26 flags F1(A) is at most 0.941. Not submitted;
+  `scripts/predict_self_training.py` now writes `expected_rejects` next to `test_rejected` in its `_run.json`.
+- **Covariate shift: none.** A classifier separating calibration from test batches on the 22 features
+  reaches AUC 0.52–0.55, and no feature differs (KS p < 0.01: none), so test-time adaptation has nothing to fix.
+
 - **The operating point is not the issue.** Out of fold, F1 of A24 is flat for 32–36 flagged batches
   (0.944–0.946); going from 34 to 36 flags adds on average one caught reject and one false alarm.
 
@@ -259,7 +322,7 @@ does it for every method registered in `brpmm.methods.METHODS`).
 - Repo (`src/brpmm/`): `features.py`, `methods.py` (all `methods.py:` entries), `evaluate.py` (protocol),
   `metrics.py`, `report.py`. Run: `BRPMM_DATA_DIR=... python -m brpmm.evaluate --process A B`.
 - `scratch/...` entries: experiment scripts on Maria's laptop (not in the repo yet); same splits and seeds.
-- A33–A49, B12: `scripts/select_final_a.py`, `scripts/tune_process_a.py`, `scripts/monitor.py`,
+- A33–A57, B12: `scripts/select_final_a.py`, `scripts/tune_process_a.py`, `scripts/monitor.py`,
   `src/brpmm/process_b.py` (results also in `outputs/process_A/final_selection.json` and `tuning/`).
 - Reports with figures: `outputs/report_<timestamp>/report.md` (gitignored). Shared findings doc:
   https://claude.ai/artifact/KX6J8CK1TAMwukKiu17siS
